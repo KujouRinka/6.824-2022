@@ -24,6 +24,48 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type Task struct {
+	Type     int
+	Filename string
+	TaskId   int
+	ReduceId int
+}
+
+const (
+	Map = iota
+	Reduce
+)
+
+func NewMapTask(filename string, taskId int) Task {
+	return Task{
+		Type:     Map,
+		Filename: filename,
+		TaskId:   taskId,
+	}
+}
+
+func NewReduceTask(reduceId, taskId int) Task {
+	return Task{
+		Type:     Reduce,
+		TaskId:   taskId,
+		ReduceId: reduceId,
+	}
+}
+
+type NeedWorkArgs struct {
+}
+
+type NeedWorkReply struct {
+	T         Task
+	ReduceCnt int
+}
+
+type FinishWorkArgs struct {
+	TaskId int
+}
+
+type FinishWorkReply struct {
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
