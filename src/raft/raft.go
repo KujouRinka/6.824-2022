@@ -7,10 +7,10 @@ package raft
 //
 // rf = Make(...)
 //   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
+// rf.Start(command interface{}) (index, curTerm, isleader)
 //   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
+// rf.GetState() (curTerm, isLeader)
+//   ask a Raft for its current curTerm, and whether it thinks it is leader
 // ApplyMsg
 //   each time a new entry is committed to the log, each Raft peer
 //   should send an ApplyMsg to the service (or tester)
@@ -63,9 +63,9 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	term      int                   // current term
+	curTerm   int                   // current curTerm
 	state     RState                // current state
-	voteFor   int                   // candidate id that received vote in current term
+	votedFor  int                   // candidate id that received vote in current curTerm
 	voteChan  chan voteParam        // channel for vote request
 	entryChan chan appendEntryParam // channel for entry request
 }
@@ -76,7 +76,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.term, reflect.TypeOf(rf.state) == reflect.TypeOf(&Leader{})
+	return rf.curTerm, reflect.TypeOf(rf.state) == reflect.TypeOf(&Leader{})
 }
 
 // save Raft's persistent state to stable storage,
@@ -141,7 +141,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 // the first return value is the index that the command will appear at
 // if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
+// curTerm. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
@@ -199,10 +199,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	// TODO: memorize term to file
-	rf.term = 0
+	// TODO: memorize curTerm to file
+	rf.curTerm = 0
 	rf.state = &Follower{}
-	rf.voteFor = -1
+	rf.votedFor = -1
 	rf.voteChan = make(chan voteParam)
 	rf.entryChan = make(chan appendEntryParam)
 

@@ -4,7 +4,7 @@ package raft
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term        int // candidate's term
+	Term        int // candidate's curTerm
 	CandidateId int // candidate requesting vote
 }
 
@@ -63,7 +63,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 type AppendEntriesArgs struct {
-	Term     int // leader's term
+	Term     int // leader's curTerm
 	LeaderId int // so follower can redirect clients
 }
 
