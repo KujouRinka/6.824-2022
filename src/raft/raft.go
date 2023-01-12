@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
@@ -58,17 +59,21 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	state    RState
+	curTerm  int
+	votedFor int
 
+	electionTimer  *time.Timer
+	heartbeatTimer *time.Timer
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// Your code here (2A).
-	return term, isleader
+	return rf.curTerm, rf.state == Leader
 }
 
 // save Raft's persistent state to stable storage,
@@ -167,13 +172,117 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
+	DPrintf("Server %d start ticker", rf.me)
 	for rf.killed() == false {
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+		select {
+		case <-rf.electionTimer.C:
+			rf.mu.Lock()
+			if rf.state != Leader {
+				rf.curTerm++
+				rf.state = Candidate
+				rf.votedFor = rf.me
+				rf.toElection()
+			}
+			resetTimer(rf.electionTimer, electionTimeout())
+			rf.mu.Unlock()
+		case <-rf.heartbeatTimer.C:
+			rf.mu.Lock()
+			if rf.state == Leader {
+				rf.sendHeartbeat()
+			}
+			resetTimer(rf.heartbeatTimer, heartbeatTimeout())
+			rf.mu.Unlock()
+		}
 	}
+}
+
+func (rf *Raft) toElection() {
+	DPrintf("%v %v: ELECTION timeout, sending vote request", rf.me, rf.curTerm)
+
+	grantedCnt := 1
+	args := RequestVoteArgs{
+		Term:        rf.curTerm,
+		CandidateId: rf.me,
+	}
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		go func(peer *labrpc.ClientEnd) {
+			var reply RequestVoteReply
+			if rf.sendRequestVote(peer, &args, &reply) {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if rf.curTerm == args.Term && rf.state == Candidate {
+					if reply.VoteGranted {
+						grantedCnt++
+						if grantedCnt > len(rf.peers)/2 {
+							DPrintf("%v %v: received majority vote, convert to LEADER", rf.me, rf.curTerm)
+							rf.state = Leader
+							rf.sendHeartbeat()
+						}
+					} else if reply.Term > rf.curTerm {
+						DPrintf("%v %v: convert to FOLLOWER due to stale term", rf.me, rf.curTerm)
+						rf.curTerm = reply.Term
+						rf.votedFor = -1
+						rf.state = Follower
+					}
+				}
+			}
+		}(rf.peers[i])
+	}
+}
+
+func (rf *Raft) sendHeartbeat() {
+	DPrintf("%v %v: LEADER: heartbeat timeout", rf.me, rf.curTerm)
+
+	okHeartbeat := 1
+	var wg sync.WaitGroup
+	wg.Add(len(rf.peers) - 1)
+	args := AppendEntriesArgs{
+		Term:     rf.curTerm,
+		LeaderId: rf.me,
+	}
+	go func() {
+		wg.Wait()
+		if okHeartbeat < len(rf.peers)/2+1 {
+			rf.mu.Lock()
+			rf.state = Follower
+			rf.votedFor = -1
+			rf.mu.Unlock()
+		}
+	}()
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		go func(peer *labrpc.ClientEnd) {
+			rf.mu.Lock()
+			if rf.state != Leader {
+				return
+			}
+			rf.mu.Unlock()
+			var reply AppendEntriesReply
+			if rf.sendAppendEntries(peer, &args, &reply) {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if rf.curTerm < reply.Term {
+					DPrintf("%v %v: convert to FOLLOWER due to stale term", rf.me, rf.curTerm)
+					rf.curTerm = reply.Term
+					rf.votedFor = -1
+					rf.state = Follower
+				} else if rf.curTerm == reply.Term {
+					okHeartbeat++
+				}
+			}
+			wg.Done()
+		}(rf.peers[i])
+	}
+
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -187,10 +296,18 @@ func (rf *Raft) ticker() {
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
+	rf := &Raft{
+		peers:     peers,
+		persister: persister,
+		me:        me,
+
+		state:    Follower,
+		curTerm:  0,
+		votedFor: -1,
+
+		electionTimer:  time.NewTimer(electionTimeout()),
+		heartbeatTimer: time.NewTimer(heartbeatTimeout()),
+	}
 
 	// Your initialization code here (2A, 2B, 2C).
 

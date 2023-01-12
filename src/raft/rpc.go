@@ -1,5 +1,7 @@
 package raft
 
+import "6.824/labrpc"
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -25,9 +27,27 @@ type voteParam struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	notify := make(chan struct{})
-	rf.voteChan <- voteParam{args, reply, notify}
-	<-notify
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("%v %v: received RequestVote from: %v %v", rf.me, rf.curTerm, args.CandidateId, args.Term)
+
+	if args.Term < rf.curTerm ||
+		(args.Term == reply.Term && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
+		DPrintf("%v %v: reject RequestVote from: %v %v: stale term", rf.me, rf.curTerm, args.CandidateId, args.Term)
+		reply.Term = rf.curTerm
+		reply.VoteGranted = false
+		return
+	}
+	if args.Term > rf.curTerm {
+		DPrintf("%v %v: update term to %v due to stale term", rf.me, rf.curTerm, args.Term)
+		rf.curTerm = args.Term
+		rf.state = Follower
+	}
+	rf.votedFor = args.CandidateId
+	resetTimer(rf.electionTimer, electionTimeout())
+
+	reply.Term = rf.curTerm
+	reply.VoteGranted = true
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -57,8 +77,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+func (rf *Raft) sendRequestVote(server *labrpc.ClientEnd,
+	args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	ok := server.Call("Raft.RequestVote", args, reply)
 	return ok
 }
 
@@ -79,12 +100,29 @@ type appendEntryParam struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	notify := make(chan struct{})
-	rf.entryChan <- appendEntryParam{args, reply, notify}
-	<-notify
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("%v %v: received AppendEntries from: %v %v", rf.me, rf.curTerm, args.LeaderId, args.Term)
+
+	if args.Term < rf.curTerm {
+		DPrintf("%v %v: reject AppendEntries from: %v %v", rf.me, rf.curTerm, args.LeaderId, args.Term)
+		reply.Term = rf.curTerm
+		reply.Success = false
+		return
+	}
+	if args.Term > rf.curTerm {
+		DPrintf("%v %v: update term to %v due to stale term", rf.me, rf.curTerm, args.Term)
+		rf.curTerm = args.Term
+		rf.state = Follower
+	}
+	resetTimer(rf.electionTimer, electionTimeout())
+
+	reply.Term = rf.curTerm
+	reply.Success = true
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+func (rf *Raft) sendAppendEntries(server *labrpc.ClientEnd,
+	args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := server.Call("Raft.AppendEntries", args, reply)
 	return ok
 }
