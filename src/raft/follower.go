@@ -1,32 +1,21 @@
 package raft
 
-import (
-	"time"
-)
-
-// type RState int
-//
-// const (
-// 	Follower RState = iota
-// 	Candidate
-// 	Leader
-// )
+import "time"
 
 type Follower struct{}
 
 func (f *Follower) Run(rf *Raft) {
 	DPrintf("%v %v: FOLLOWER: start", rf.me, rf.curTerm)
 	// make a random timeout between 150 and 300ms
-	timeout := time.Duration(randBetween(ReElectLower, ReElectUpper)) * time.Millisecond
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(electionTimeout())
+	// resetTimer(rf.electionTimer, electionTimeout())
 	for {
 		select {
 		case <-timer.C:
-			// timeout, become candidate
+			// timeout, become candidate and vote for self
 			DPrintf("%v: FOLLOWER: timer: timeout, become candidate", rf.me)
 			rf.mu.Lock()
 			rf.state = &Candidate{}
-			rf.curTerm++
 			rf.votedFor = rf.me
 			rf.mu.Unlock()
 			return
@@ -49,25 +38,19 @@ func (f *Follower) Run(rf *Raft) {
 			}
 
 			// grant vote, update curTerm
-			DPrintf("%v: FOLLOWER: voteChan: update curTerm from %v to %v", rf.me, rf.curTerm, vote.args.Term)
-			if (vote.args.Term == rf.curTerm && rf.votedFor == -1) ||
-				//rf.votedFor == vote.args.CandidateId ||
-				vote.args.Term > rf.curTerm {
+			if vote.args.Term > rf.curTerm ||
+				(vote.args.Term == rf.curTerm && rf.votedFor == vote.args.CandidateId) {
+				DPrintf("%v: FOLLOWER: voteChan: update curTerm from %v to %v", rf.me, rf.curTerm, vote.args.Term)
 				rf.curTerm = vote.args.Term
 				rf.votedFor = vote.args.CandidateId
 				vote.reply.Term = rf.curTerm
 				vote.reply.VoteGranted = true
+				// reset timer
+				DPrintf("%v: FOLLOWER: voteChan: reset timer", rf.me)
+				resetTimer(timer, electionTimeout())
 			}
-			vote.notify <- struct{}{}
 			rf.mu.Unlock()
-
-			// reset timer
-			DPrintf("%v: FOLLOWER: voteChan: reset timer", rf.me)
-			timeout = time.Duration(randBetween(ReElectLower, ReElectUpper)) * time.Millisecond
-			if !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(timeout)
+			vote.notify <- struct{}{}
 		case entry := <-rf.entryChan:
 			// receive AppendEntries RPC
 			// now we just handle heartbeat in 2A
@@ -81,25 +64,17 @@ func (f *Follower) Run(rf *Raft) {
 				// larger curTerm, may this server is out of date
 				DPrintf("%v: FOLLOWER: entryChan: update curTerm from %v to %v", rf.me, rf.curTerm, entry.args.Term)
 				rf.curTerm = entry.args.Term
-				rf.votedFor = -1
+				rf.votedFor = entry.args.LeaderId
 				entry.reply.Term = rf.curTerm
 				entry.reply.Success = true
-				timeout = time.Duration(randBetween(ReElectLower, ReElectUpper)) * time.Millisecond
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(timeout)
+				resetTimer(timer, electionTimeout())
 			} else {
 				// same curTerm, reset timer
 				// TODO: add AppendEntries for further implementation
 				DPrintf("%v: FOLLOWER: entryChan: AppendEntries from %v, reset timer", rf.me, entry.args.LeaderId)
 				entry.reply.Term = rf.curTerm
 				entry.reply.Success = true
-				timeout = time.Duration(randBetween(ReElectLower, ReElectUpper)) * time.Millisecond
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(timeout)
+				resetTimer(timer, electionTimeout())
 			}
 			rf.mu.Unlock()
 			entry.notify <- struct{}{}

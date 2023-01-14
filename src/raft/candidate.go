@@ -11,6 +11,7 @@ func (c *Candidate) Run(rf *Raft) {
 	DPrintf("%v %v: CANDIDATE: start", rf.me, rf.curTerm)
 
 	rf.mu.Lock()
+	rf.curTerm++
 	DPrintf("%v: CANDIDATE: add curTerm ok", rf.me)
 
 	// send RequestVote RPC
@@ -33,44 +34,37 @@ func (c *Candidate) Run(rf *Raft) {
 	}
 
 	grantedCnt := 1
-	replyCnt := 1
 	minVote := len(rf.peers)/2 + 1
 	rf.mu.Unlock()
 
-	timeout := time.Duration(randBetween(ReElectLower, ReElectUpper)) * time.Millisecond
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(electionTimeout())
 	for {
 		select {
 		case <-timer.C:
 			DPrintf("%v: CANDIDATE: timer: timeout, start new election", rf.me)
-			if replyCnt >= minVote {
-				rf.mu.Lock()
-				rf.curTerm++
-				rf.mu.Unlock()
-			}
 			return
 		case reply := <-replyChan:
-			replyCnt++
+			rf.mu.Lock()
 			if reply.Term > rf.curTerm {
-				// become follower
+				// received larger term, become follower
 				DPrintf("%v: CANDIDATE: replyChan: become FOLLOWER due to stale curTerm", rf.me)
-				rf.mu.Lock()
 				rf.curTerm = reply.Term
 				rf.votedFor = -1
 				rf.state = &Follower{}
 				rf.mu.Unlock()
 				return
 			} else if reply.Term == rf.curTerm && reply.VoteGranted {
+				// received a grantVote
 				DPrintf("%v: CANDIDATE: replyChan: receive valid granted vote with term: %v", rf.me, reply.Term)
 				grantedCnt++
 				if grantedCnt >= minVote {
 					DPrintf("%v: CANDIDATE replyChan: become LEADER", rf.me)
-					rf.mu.Lock()
 					rf.state = &Leader{}
 					rf.mu.Unlock()
 					return
 				}
 			}
+			rf.mu.Unlock()
 		case vote := <-rf.voteChan:
 			rf.mu.Lock()
 			if vote.args.Term > rf.curTerm {
@@ -114,6 +108,8 @@ func (c *Candidate) Run(rf *Raft) {
 				entry.reply.Term = rf.curTerm
 				entry.reply.Success = false
 			}
+			rf.mu.Unlock()
+			entry.notify <- struct{}{}
 		}
 	}
 }

@@ -63,9 +63,10 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	curTerm   int                   // current curTerm
-	state     RState                // current state
-	votedFor  int                   // candidate id that received vote in current curTerm
+	curTerm  int    // current curTerm
+	state    RState // current state
+	votedFor int    // candidate id that received vote in current curTerm
+
 	voteChan  chan voteParam        // channel for vote request
 	entryChan chan appendEntryParam // channel for entry request
 }
@@ -203,6 +204,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.curTerm = 0
 	rf.state = &Follower{}
 	rf.votedFor = -1
+
 	rf.voteChan = make(chan voteParam)
 	rf.entryChan = make(chan appendEntryParam)
 

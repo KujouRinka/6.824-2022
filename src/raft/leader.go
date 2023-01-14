@@ -30,34 +30,15 @@ func (l *Leader) Run(rf *Raft) {
 			}
 		}(rf.peers[i])
 	}
-	okHeartbeatCnt := 1
-	replyCnt := 1
-	minHeartbeat := len(rf.peers)/2 + 1
 	rf.mu.Unlock()
 
 	// make heartbeat timer
-	heartbeatInterval := time.Duration(HeartBeatTimeout) * time.Millisecond
-	timer := time.NewTimer(heartbeatInterval)
+	timer := time.NewTimer(heartbeatTimeout())
 	for {
 		select {
 		case <-timer.C:
-			DPrintf("%v: LEADER: timer: timeout, decide to send heartbeat", rf.me)
-			if okHeartbeatCnt >= minHeartbeat {
-				DPrintf("%v: LEADER: timer: timeout, okHeartbeatCnt allow to stay LEADER", rf.me)
-				return
-			} else if replyCnt >= minHeartbeat {
-				DPrintf("%v: LEADER: timer: timeout, okHeartbeatCnt not allow to stay LEADER", rf.me)
-				DPrintf("%v: LEADER: timer: timeout, become FOLLOWER", rf.me)
-				rf.mu.Lock()
-				rf.state = &Follower{}
-				rf.votedFor = -1
-				rf.mu.Unlock()
-				return
-			} else {
-				return
-			}
+			return
 		case reply := <-replyChan:
-			replyCnt++
 			rf.mu.Lock()
 			if reply.Term > rf.curTerm {
 				DPrintf("%v: LEADER: replyChan: become FOLLOWER due to stale curTerm", rf.me)
@@ -66,8 +47,6 @@ func (l *Leader) Run(rf *Raft) {
 				rf.state = &Follower{}
 				rf.mu.Unlock()
 				return
-			} else if reply.Success && reply.Term == rf.curTerm {
-				okHeartbeatCnt++
 			}
 			rf.mu.Unlock()
 		case vote := <-rf.voteChan:
@@ -79,12 +58,15 @@ func (l *Leader) Run(rf *Raft) {
 				rf.state = &Follower{}
 				vote.reply.VoteGranted = true
 				vote.reply.Term = rf.curTerm
+				rf.mu.Unlock()
+				vote.notify <- struct{}{}
+				return
 			} else if vote.args.Term <= rf.curTerm {
 				DPrintf("%v: LEADER: voteChan: vote denied", rf.me)
 				vote.reply.VoteGranted = false
 				vote.reply.Term = rf.curTerm
 			}
-			rf.mu.Lock()
+			rf.mu.Unlock()
 			vote.notify <- struct{}{}
 		case entry := <-rf.entryChan:
 			rf.mu.Lock()
@@ -95,6 +77,9 @@ func (l *Leader) Run(rf *Raft) {
 				rf.state = &Follower{}
 				entry.reply.Success = true
 				entry.reply.Term = rf.curTerm
+				rf.mu.Unlock()
+				entry.notify <- struct{}{}
+				return
 			} else if entry.args.Term <= rf.curTerm {
 				DPrintf("%v: LEADER: entryChan: entry denied", rf.me)
 				entry.reply.Success = false
